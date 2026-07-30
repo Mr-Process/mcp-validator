@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare%20Workers-Deployed-orange?logo=cloudflare)](https://mcp-validator.jonathonpowell.workers.dev)
+[![MCP Validated](https://mcp-validator.jonathonpowell.workers.dev/badge?url=https://acp-bridge-mcp.jonathonpowell.workers.dev/mcp)](https://mcp-validator.jonathonpowell.workers.dev)
 
 An automated validation, schema testing, and security fuzzing engine for Model Context Protocol (MCP) servers. 
 
@@ -39,7 +40,8 @@ MCP Validator connects to any MCP server (over HTTP/SSE or local `stdio`), disco
                                             │
                                             ▼
                            ┌─────────────────────────────────┐
-                           │    Markdown / JSON Reports      │
+                           │ Multi-Format Report Generation  │
+                           │ (MD, JSON, SARIF, JUnit XML)    │
                            └─────────────────────────────────┘
 ```
 
@@ -48,6 +50,7 @@ MCP Validator connects to any MCP server (over HTTP/SSE or local `stdio`), disco
 ## ✨ Features
 
 - **📡 Dual Transport Support**: Connects to remote HTTP/Streamable HTTP endpoints (`https://...`) or spawns local CLI binaries (`--command "node dist/index.js"`).
+- **🔑 Enterprise Authentication**: Pass custom headers (`-H "Authorization: Bearer <token>"`) to validate authenticated MCP servers.
 - **🛠️ Tool Schema Validation**: Generates 6 test categories per tool (`valid_minimal`, `valid_full`, `edge_empty_string`, `edge_zero`, `edge_max`, `edge_boundary`, `invalid_missing_required`, `invalid_wrong_type`, `invalid_null`).
 - **🛡️ Output Schema Validation**: Validates tool response payloads against declared `outputSchema` definitions, flagging `schema_mismatch` errors.
 - **💣 Security Fuzzing**: Injects 5 security attack vectors per string property:
@@ -57,8 +60,9 @@ MCP Validator connects to any MCP server (over HTTP/SSE or local `stdio`), disco
   - **Format String**: `%s%s%s%n%x%d`
   - **Buffer Overflow**: `50,000` character string payloads
 - **📄 Resource & Prompt Testing**: Automatically discovers and tests `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`.
-- **🤖 GitHub Action Integration**: Ready-to-use [`action.yml`](action.yml) and workflow template for PR regression testing.
-- **☁️ Cloudflare Worker Deployment**: Serverless web UI landing page and validation API deployed on Cloudflare Workers.
+- **📊 Enterprise CI/CD Exporters**: Supports Markdown, JSON, **SARIF v2.1.0** (for GitHub Security / Code Scanning tab), and **JUnit XML** (for Jenkins, CircleCI, GitHub Actions).
+- **🏷️ Dynamic SVG Badges**: Embed live badge SVG status cards in your server's README file.
+- **🏆 Ecosystem Compatibility Benchmark**: Run automated benchmark matrix reports across public MCP servers.
 
 ---
 
@@ -71,9 +75,14 @@ Validate a remote HTTP/SSE MCP server:
 npx tsx src/cli.ts https://acp-bridge-mcp.jonathonpowell.workers.dev/mcp --format md
 ```
 
+Validate an authenticated server with Bearer Token:
+```bash
+npx tsx src/cli.ts https://api.example.com/mcp -H "Authorization: Bearer my_secret_token" --format sarif
+```
+
 Validate a local stdio MCP server command:
 ```bash
-npx tsx src/cli.ts --command "node dist/index.js" --format md
+npx tsx src/cli.ts --command "node dist/index.js" --format junit
 ```
 
 ### 2. Standalone Build & Run
@@ -85,6 +94,35 @@ npm run build
 
 # Run built CLI
 npm start https://acp-bridge-mcp.jonathonpowell.workers.dev/mcp -- --format md
+```
+
+---
+
+## 🏷️ Live README SVG Badges
+
+Add a live validation badge to your MCP server repository:
+
+```markdown
+[![MCP Validated](https://mcp-validator.jonathonpowell.workers.dev/badge?url=https://your-mcp-server.com/mcp)](https://mcp-validator.jonathonpowell.workers.dev)
+```
+
+---
+
+## 🏆 Ecosystem Compatibility Benchmark
+
+Run the automated benchmark suite against reference MCP servers to generate an ecosystem matrix:
+
+```bash
+npx tsx src/benchmark.ts
+```
+
+Output:
+```markdown
+# 🏆 MCP Server Ecosystem Compatibility Matrix
+
+| Server Name | Category | Tools | Tests Run | Pass Rate | Fuzzing Passed | Latency (avg) | Status |
+|-------------|----------|-------|-----------|-----------|----------------|---------------|--------|
+| **Autonomous-ACP-Bridge** | Payment & Escrow Bridge | 5 | 100 | 100% | 45 | 95ms | 🟢 Compliant |
 ```
 
 ---
@@ -115,7 +153,7 @@ jobs:
         uses: Mr-Process/mcp-validator@main
         with:
           command: "node dist/index.js"
-          format: "md"
+          format: "sarif"
 ```
 
 ---
@@ -126,46 +164,10 @@ jobs:
 | :--- | :--- | :--- | :--- |
 | `<url>` | `string` | — | HTTP/Streamable HTTP MCP server URL |
 | `--command` | `string` | — | Local command to execute stdio MCP server |
-| `--format` | `json` \| `md` | `json` | Report output format |
+| `-H, --header` | `string` | — | Custom HTTP header (e.g. `-H "Authorization: Bearer token"`) |
+| `--format` | `json` \| `md` \| `sarif` \| `junit` | `json` | Report output format |
 | `--timeout` | `number` | `30000` | Request timeout in milliseconds |
 | `--max-tests` | `number` | — | Limit total tool test cases executed |
-
----
-
-## 📊 Sample Validation Report Output
-
-```markdown
-# ⚡ MCP Server Validation Report
-
-**Server / Command:** `https://acp-bridge-mcp.jonathonpowell.workers.dev/mcp`
-**Date:** 2026-07-30T04:59:33.730Z
-**Tools Discovered:** 5
-**Resources Discovered:** 0
-**Prompts Discovered:** 0
-**Total Tests Run:** 100
-
-## 📊 Summary
-
-| Status | Count |
-|--------|-------|
-| Pass | 100 |
-| Fail | 0 |
-| Crash | 0 |
-| Schema Mismatch | 0 |
-| Security Fuzzing Passed | 45 |
-
-## 🛠️ Tool Validation Results
-
-### Tool: `acp_create_job_by_name`
-
-| Category | Description | Status | Duration | Error |
-|----------|-------------|--------|----------|-------|
-| valid_minimal | Only required fields with default values | pass | 103ms | |
-| fuzz_sql_injection | Fuzz offeringName with SQL injection vector | pass | 95ms | |
-| fuzz_overflow_string | Fuzz offeringName with Buffer Overflow (50k chars) | pass | 179ms | |
-| invalid_missing_required | Missing required field: offeringName | pass | 97ms | |
-| invalid_wrong_type | offeringName = number instead of string | pass | 98ms | |
-```
 
 ---
 
