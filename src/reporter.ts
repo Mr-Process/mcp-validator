@@ -123,3 +123,97 @@ export function reportAsMarkdown(report: ValidationReport): string {
 
   return lines.join("\n");
 }
+
+/**
+ * Output report as SARIF v2.1.0 for GitHub Code Scanning / Security Tab integration.
+ */
+export function reportAsSarif(report: ValidationReport): string {
+  const rules: any[] = [];
+  const results: any[] = [];
+
+  const ruleMap = new Map<string, number>();
+
+  for (const r of report.results) {
+    if (r.status === "fail" || r.status === "crash" || r.status === "schema_mismatch") {
+      const ruleId = `MCP-${r.category.toUpperCase()}`;
+      if (!ruleMap.has(ruleId)) {
+        ruleMap.set(ruleId, rules.length);
+        rules.push({
+          id: ruleId,
+          shortDescription: { text: `MCP Validation Issue: ${r.category}` },
+          fullDescription: { text: `Validation failed for category ${r.category}` },
+          defaultConfiguration: {
+            level: r.status === "crash" ? "error" : "warning",
+          },
+        });
+      }
+
+      results.push({
+        ruleId,
+        ruleIndex: ruleMap.get(ruleId),
+        message: {
+          text: `[Tool: ${r.toolName}] ${r.description}: ${r.error || r.status}`,
+        },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: `mcp://${report.server}/${r.toolName}` },
+            },
+          },
+        ],
+      });
+    }
+  }
+
+  const sarif = {
+    $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+    version: "2.1.0",
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: "MCP Validator",
+            version: "0.1.0",
+            rules,
+          },
+        },
+        results,
+      },
+    ],
+  };
+
+  return JSON.stringify(sarif, null, 2);
+}
+
+/**
+ * Output report as JUnit XML format for Jenkins, CircleCI, and GitHub Actions test reporting.
+ */
+export function reportAsJunit(report: ValidationReport): string {
+  const xmlLines: string[] = [];
+  xmlLines.push('<?xml version="1.0" encoding="UTF-8"?>');
+  xmlLines.push(
+    `<testsuite name="MCP Validation" tests="${report.testsRun}" failures="${report.summary.fail + report.summary.schemaMismatch}" errors="${report.summary.crash}" timestamp="${report.timestamp}">`
+  );
+
+  for (const r of report.results) {
+    xmlLines.push(`  <testcase classname="${r.toolName}" name="${escapeXml(r.description)}" time="${(r.durationMs / 1000).toFixed(3)}">`);
+    if (r.status === "fail" || r.status === "schema_mismatch") {
+      xmlLines.push(`    <failure message="${escapeXml(r.error || r.status)}">${escapeXml(JSON.stringify(r.input))}</failure>`);
+    } else if (r.status === "crash") {
+      xmlLines.push(`    <error message="${escapeXml(r.error || "Server Crash")}">${escapeXml(JSON.stringify(r.input))}</error>`);
+    }
+    xmlLines.push(`  </testcase>`);
+  }
+
+  xmlLines.push("</testsuite>");
+  return xmlLines.join("\n");
+}
+
+function escapeXml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}

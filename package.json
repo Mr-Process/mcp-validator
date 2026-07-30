@@ -1,10 +1,39 @@
 {
   "name": "mcp-validator",
   "version": "0.1.0",
+  "description": "Automated validation, schema testing, and security fuzzing engine for Model Context Protocol (MCP) servers.",
+  "license": "MIT",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
-    "mcp-validate": "./dist/cli.js"
+    "mcp-validate": "./dist/cli.js",
+    "mcp-validator": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "action.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mr-Process/mcp-validator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Mr-Process/mcp-validator/issues"
+  },
+  "homepage": "https://github.com/Mr-Process/mcp-validator#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "validator",
+    "testing",
+    "fuzzing",
+    "json-schema",
+    "ai-agents",
+    "cloudflare-workers"
+  ],
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsc",

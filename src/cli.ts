@@ -1,7 +1,7 @@
 import { RawMcpClient, StdioMcpClient, McpClientInterface } from "./client.js";
 import { generateTestCases } from "./generator.js";
 import { runTests } from "./runner.js";
-import { buildReport, reportAsJson, reportAsMarkdown } from "./reporter.js";
+import { buildReport, reportAsJson, reportAsMarkdown, reportAsSarif, reportAsJunit } from "./reporter.js";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -9,18 +9,20 @@ async function main() {
     console.log(`Usage: npx mcp-validate <target> [options]
 
 Target:
-  <url>               HTTP/Streamable MCP server URL (e.g. https://example.com/mcp)
-  --command <cmd>     Local command to run stdio MCP server (e.g. --command "node server.js")
+  <url>                    HTTP/Streamable MCP server URL (e.g. https://example.com/mcp)
+  --command <cmd>          Local command to run stdio MCP server (e.g. --command "node server.js")
 
 Options:
-  --format <json|md>  Output format (default: json)
-  --timeout <ms>      Request timeout in milliseconds (default: 30000)
-  --max-tests <n>     Maximum number of tool test cases to execute
-  --help, -h          Show this help
+  --header, -H <header>    Custom HTTP header (e.g. -H "Authorization: Bearer token")
+  --format <json|md|sarif|junit> Output format (default: json)
+  --timeout <ms>           Request timeout in milliseconds (default: 30000)
+  --max-tests <n>          Maximum number of tool test cases to execute
+  --help, -h               Show this help
 
 Examples:
   npx mcp-validate https://example.com/mcp --format md
-  npx mcp-validate --command "node build/index.js" --format md
+  npx mcp-validate https://example.com/mcp -H "Authorization: Bearer secret" --format sarif
+  npx mcp-validate --command "node build/index.js" --format junit
 `);
     process.exit(0);
   }
@@ -30,10 +32,20 @@ Examples:
   let format = "json";
   let timeout = 30000;
   let maxTests: number | undefined = undefined;
+  const customHeaders: Record<string, string> = {};
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--command" || args[i] === "--stdio") {
       stdioCmd = args[i + 1] || "";
+      i++;
+    } else if (args[i] === "--header" || args[i] === "-H") {
+      const headerStr = args[i + 1] || "";
+      const colonIdx = headerStr.indexOf(":");
+      if (colonIdx > 0) {
+        const key = headerStr.slice(0, colonIdx).trim();
+        const val = headerStr.slice(colonIdx + 1).trim();
+        customHeaders[key] = val;
+      }
       i++;
     } else if (args[i] === "--format" && args[i + 1]) {
       format = args[i + 1];
@@ -59,7 +71,7 @@ Examples:
   } else if (serverTarget) {
     targetLabel = serverTarget;
     console.error(`Connecting to ${serverTarget}...`);
-    client = new RawMcpClient(serverTarget, timeout);
+    client = new RawMcpClient(serverTarget, timeout, customHeaders);
   } else {
     console.error("Error: Must specify either an HTTP URL or a local stdio command using --command");
     process.exit(1);
@@ -82,6 +94,10 @@ Examples:
 
   if (format === "md") {
     console.log(reportAsMarkdown(report));
+  } else if (format === "sarif") {
+    console.log(reportAsSarif(report));
+  } else if (format === "junit") {
+    console.log(reportAsJunit(report));
   } else {
     console.log(reportAsJson(report));
   }

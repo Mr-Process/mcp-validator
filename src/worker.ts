@@ -1,13 +1,47 @@
 import { RawMcpClient } from "./client.js";
 import { generateTestCases } from "./generator.js";
 import { runTests } from "./runner.js";
-import { buildReport, reportAsJson, reportAsMarkdown } from "./reporter.js";
+import { buildReport, reportAsJson, reportAsMarkdown, reportAsSarif, reportAsJunit } from "./reporter.js";
 
 export default {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // Serve a simple landing page on GET /
+    // Dynamic SVG Badge Endpoint: GET /badge?url=...
+    if (url.pathname === "/badge") {
+      const mcpUrl = url.searchParams.get("url");
+      if (!mcpUrl) {
+        return new Response(generateBadgeSvg("mcp validator", "invalid url", "#e53e3e"), {
+          headers: { "Content-Type": "image/svg+xml", "Cache-Control": "no-cache" },
+        });
+      }
+
+      try {
+        const client = new RawMcpClient(mcpUrl, 15000);
+        const tools = await client.discoverTools();
+        const testCases = new Map();
+        for (const tool of tools) {
+          testCases.set(tool.name, generateTestCases(tool.inputSchema as any));
+        }
+
+        const suite = await runTests(client, tools, testCases, 15000, 20);
+        const report = buildReport(mcpUrl, suite);
+
+        const passRate = report.testsRun > 0 ? Math.round((report.summary.pass / report.testsRun) * 100) : 0;
+        const badgeColor = report.summary.fail > 0 || report.summary.crash > 0 ? "#e53e3e" : "#38a169";
+        const badgeText = `${passRate}% pass (${report.testsRun} tests)`;
+
+        return new Response(generateBadgeSvg("mcp validation", badgeText, badgeColor), {
+          headers: { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=300" },
+        });
+      } catch (e) {
+        return new Response(generateBadgeSvg("mcp validation", "unreachable", "#718096"), {
+          headers: { "Content-Type": "image/svg+xml", "Cache-Control": "no-cache" },
+        });
+      }
+    }
+
+    // Serve landing page on GET /
     if (request.method === "GET" && !url.searchParams.has("url")) {
       return new Response(LANDING_HTML, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -26,8 +60,19 @@ export default {
     const timeout = parseInt(url.searchParams.get("timeout") || "30000", 10);
     const maxTests = parseInt(url.searchParams.get("maxTests") || "40", 10);
 
+    // Custom headers support via ?headers={"Authorization":"Bearer token"}
+    let customHeaders: Record<string, string> | undefined;
+    const headersParam = url.searchParams.get("headers");
+    if (headersParam) {
+      try {
+        customHeaders = JSON.parse(headersParam);
+      } catch {
+        // ignore invalid JSON headers
+      }
+    }
+
     try {
-      const client = new RawMcpClient(mcpUrl, timeout);
+      const client = new RawMcpClient(mcpUrl, timeout, customHeaders);
       const tools = await client.discoverTools();
       const testCases = new Map();
 
@@ -35,12 +80,20 @@ export default {
         testCases.set(tool.name, generateTestCases(tool.inputSchema as any));
       }
 
-      const results = await runTests(client, tools, testCases, maxTests);
-      const report = buildReport(mcpUrl, results);
+      const suite = await runTests(client, tools, testCases, maxTests);
+      const report = buildReport(mcpUrl, suite);
 
       if (format === "json") {
         return new Response(reportAsJson(report), {
           headers: { "Content-Type": "application/json" },
+        });
+      } else if (format === "sarif") {
+        return new Response(reportAsSarif(report), {
+          headers: { "Content-Type": "application/sarif+json" },
+        });
+      } else if (format === "junit") {
+        return new Response(reportAsJunit(report), {
+          headers: { "Content-Type": "application/xml" },
         });
       }
 
@@ -55,6 +108,28 @@ export default {
     }
   },
 };
+
+function generateBadgeSvg(label: string, value: string, color: string): string {
+  const labelWidth = label.length * 7 + 12;
+  const valueWidth = value.length * 7 + 12;
+  const totalWidth = labelWidth + valueWidth;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="20">
+    <linearGradient id="b" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+    <clipPath id="a"><rect width="${totalWidth}" height="20" rx="3" fill="#fff"/></clipPath>
+    <g clip-path="url(#a)">
+      <rect width="${labelWidth}" height="20" fill="#555"/>
+      <rect x="${labelWidth}" width="${valueWidth}" height="20" fill="${color}"/>
+      <rect width="${totalWidth}" height="20" fill="url(#b)"/>
+    </g>
+    <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+      <text x="${labelWidth / 2}" y="15" fill="#010101" fill-opacity=".3">${label}</text>
+      <text x="${labelWidth / 2}" y="14">${label}</text>
+      <text x="${labelWidth + valueWidth / 2}" y="15" fill="#010101" fill-opacity=".3">${value}</text>
+      <text x="${labelWidth + valueWidth / 2}" y="14">${value}</text>
+    </g>
+  </svg>`;
+}
 
 const LANDING_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -117,14 +192,19 @@ const LANDING_HTML = `<!DOCTYPE html>
 <body>
   <div class="card">
     <h1>⚡ MCP Validator</h1>
-    <p>Validate any MCP server by auto-generating and running test cases from its tool schemas.</p>
+    <p>Validate any MCP server by auto-generating and running test cases, security fuzzing, resources, and prompts.</p>
     <form id="f" onsubmit="go(event)">
       <label>MCP Server URL</label>
       <input id="url" type="url" placeholder="https://your-server.com/mcp" required>
       <div class="row">
         <div>
           <label>Format</label>
-          <select id="fmt"><option value="md">Markdown</option><option value="json">JSON</option></select>
+          <select id="fmt">
+            <option value="md">Markdown</option>
+            <option value="json">JSON</option>
+            <option value="sarif">SARIF (GitHub Security)</option>
+            <option value="junit">JUnit XML</option>
+          </select>
         </div>
         <div>
           <label>Timeout (ms)</label>
