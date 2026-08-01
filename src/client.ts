@@ -77,12 +77,14 @@ async function rpcRequest(
   url: string,
   message: JsonRpcRequest | JsonRpcNotification,
   sessionId: string | null,
-  timeoutMs: number
+  timeoutMs: number,
+  customHeaders?: Record<string, string>
 ): Promise<{ body: unknown; sessionId: string | null }> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Accept": "application/json, text/event-stream",
-    "User-Agent": "mcp-validator/0.1.0",
+    "User-Agent": "mcp-validator/1.0.0",
+    ...customHeaders,
   };
   if (sessionId) {
     headers["mcp-session-id"] = sessionId;
@@ -126,7 +128,11 @@ export class RawMcpClient implements McpClientInterface {
   private sessionId: string | null = null;
   private reqId = 1;
 
-  constructor(private serverUrl: string, private timeoutMs = 30000) {}
+  constructor(
+    private serverUrl: string,
+    private timeoutMs = 30000,
+    private customHeaders?: Record<string, string>
+  ) {}
 
   async connect(): Promise<void> {
     if (this.sessionId) return;
@@ -140,11 +146,12 @@ export class RawMcpClient implements McpClientInterface {
         params: {
           protocolVersion: "2025-03-26",
           capabilities: {},
-          clientInfo: { name: "mcp-validator", version: "0.1.0" },
+          clientInfo: { name: "mcp-validator", version: "1.0.0" },
         },
       },
       null, // Never send sessionId header during initialize
-      this.timeoutMs
+      this.timeoutMs,
+      this.customHeaders
     );
     this.sessionId = initResult.sessionId;
 
@@ -152,7 +159,8 @@ export class RawMcpClient implements McpClientInterface {
       this.serverUrl,
       { jsonrpc: "2.0", method: "notifications/initialized" },
       this.sessionId,
-      this.timeoutMs
+      this.timeoutMs,
+      this.customHeaders
     );
     this.sessionId = notifResult.sessionId;
   }
@@ -164,7 +172,8 @@ export class RawMcpClient implements McpClientInterface {
       this.serverUrl,
       { jsonrpc: "2.0", id: this.reqId++, method: "tools/list", params: {} },
       this.sessionId,
-      this.timeoutMs
+      this.timeoutMs,
+      this.customHeaders
     );
 
     const result = listResult.body as any;
@@ -196,7 +205,8 @@ export class RawMcpClient implements McpClientInterface {
         params: { name: toolName, arguments: args },
       },
       this.sessionId,
-      this.timeoutMs
+      this.timeoutMs,
+      this.customHeaders
     );
 
     const result = callResult.body as any;
@@ -218,7 +228,8 @@ export class RawMcpClient implements McpClientInterface {
         this.serverUrl,
         { jsonrpc: "2.0", id: this.reqId++, method: "resources/list", params: {} },
         this.sessionId,
-        this.timeoutMs
+        this.timeoutMs,
+        this.customHeaders
       );
       const result = res.body as any;
       if (result?.error) return [];
@@ -235,7 +246,8 @@ export class RawMcpClient implements McpClientInterface {
       this.serverUrl,
       { jsonrpc: "2.0", id: this.reqId++, method: "resources/read", params: { uri } },
       this.sessionId,
-      this.timeoutMs
+      this.timeoutMs,
+      this.customHeaders
     );
     const result = res.body as any;
     if (result?.error) {
@@ -252,7 +264,8 @@ export class RawMcpClient implements McpClientInterface {
         this.serverUrl,
         { jsonrpc: "2.0", id: this.reqId++, method: "prompts/list", params: {} },
         this.sessionId,
-        this.timeoutMs
+        this.timeoutMs,
+        this.customHeaders
       );
       const result = res.body as any;
       if (result?.error) return [];
@@ -269,7 +282,8 @@ export class RawMcpClient implements McpClientInterface {
       this.serverUrl,
       { jsonrpc: "2.0", id: this.reqId++, method: "prompts/get", params: { name, arguments: args } },
       this.sessionId,
-      this.timeoutMs
+      this.timeoutMs,
+      this.customHeaders
     );
     const result = res.body as any;
     if (result?.error) {
@@ -329,7 +343,7 @@ export class StdioMcpClient implements McpClientInterface {
     await this.request("initialize", {
       protocolVersion: "2025-03-26",
       capabilities: {},
-      clientInfo: { name: "mcp-validator-stdio", version: "0.1.0" },
+      clientInfo: { name: "mcp-validator-stdio", version: "1.0.0" },
     });
 
     // Send initialized notification

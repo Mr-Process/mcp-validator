@@ -24,7 +24,7 @@ export default {
           testCases.set(tool.name, generateTestCases(tool.inputSchema as any));
         }
 
-        const suite = await runTests(client, tools, testCases, 15000, 20);
+        const suite = await runTests(client, tools, testCases, 20);
         const report = buildReport(mcpUrl, suite);
 
         const passRate = report.testsRun > 0 ? Math.round((report.summary.pass / report.testsRun) * 100) : 0;

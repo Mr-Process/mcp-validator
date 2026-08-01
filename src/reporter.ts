@@ -173,7 +173,7 @@ export function reportAsSarif(report: ValidationReport): string {
         tool: {
           driver: {
             name: "MCP Validator",
-            version: "0.1.0",
+            version: "1.0.0",
             rules,
           },
         },
