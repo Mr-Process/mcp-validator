@@ -6,7 +6,7 @@
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare%20Workers-Deployed-orange?logo=cloudflare)](https://mcp-validator.jonathonpowell.workers.dev)
 [![MCP Validated](https://mcp-validator.jonathonpowell.workers.dev/badge?url=https://acp-bridge-mcp.jonathonpowell.workers.dev/mcp)](https://mcp-validator.jonathonpowell.workers.dev)
 
-An automated validation, schema testing, and security fuzzing engine for Model Context Protocol (MCP) servers.
+A policy-driven validation, schema testing, and security fuzzing engine for Model Context Protocol (MCP) servers.
 
 ---
 
@@ -16,7 +16,7 @@ Model Context Protocol (MCP) servers are multiplying rapidly across the AI lands
 
 **MCP Validator** bridges this critical quality and security gap. It provides an automated, protocol-native test suite generator, contract validator, and security fuzzing engine for any MCP server.
 
-Whether your MCP server runs as a remote HTTP/SSE cloud endpoint or a local command-line binary (`stdio`), **MCP Validator** automatically inspects your server, generates comprehensive test vectors, executes fuzzing payloads, and produces actionable validation reports.
+Whether your MCP server runs as a remote HTTP/SSE cloud endpoint or a local command-line binary (`stdio`), **MCP Validator** discovers its capabilities and generates test vectors. It begins in **discovery-only mode**; tool calls, fuzzing, resource reads, prompt execution, and local-process launch require explicit, bounded operator opt-in.
 
 ---
 
@@ -38,7 +38,7 @@ MCP Validator executes an end-to-end, multi-stage automated validation pipeline 
      - `invalid_wrong_type`: Sends invalid data types (e.g. string where number is expected).
      - `invalid_null`: Tests null safety on non-null parameters.
 
-3. **Security Fuzzing & Mutation Testing**:
+3. **Security Fuzzing & Mutation Testing** — only after explicit `--allow-fuzzing` and a bounded `--max-tests` budget:
    - Automatically injects 5 security attack vectors per string parameter to test server resilience:
      - **SQL Injection**: `' OR '1'='1'; DROP TABLE users; --`
      - **Path Traversal**: `../../../../etc/passwd`
@@ -51,9 +51,9 @@ MCP Validator executes an end-to-end, multi-stage automated validation pipeline 
    - Validates returned tool result payloads against declared `outputSchema` definitions.
    - Flags structural violations as `schema_mismatch` errors.
 
-5. **Resource & Prompt Verification**:
-   - Tests resource read capabilities (`resources/read`) and tracks content lengths and MIME types.
-   - Tests prompt retrieval (`prompts/get`) with default and generated prompt arguments.
+5. **Resource & Prompt Verification** — only after explicit, separately bounded opt-in:
+   - Reads resources (`resources/read`) only with `--allow-resource-reads --max-resources <n>`.
+   - Retrieves prompts (`prompts/get`) only with `--allow-prompt-execution --max-prompts <n>`.
 
 6. **Multi-Format Export & CI/CD Reporting**:
    - Generates reports in Markdown, JSON, **SARIF v2.1.0** (for native GitHub Security / Code Scanning tab integration), or **JUnit XML** (for CI test runners).
@@ -97,12 +97,12 @@ MCP Validator executes an end-to-end, multi-stage automated validation pipeline 
 
 ## ✨ Key Features
 
-- **📡 Dual Transport Support**: Connects to remote HTTP/Streamable HTTP endpoints (`https://...`) or spawns local CLI binaries (`--command "node dist/index.js"`).
+- **📡 Dual Transport Support**: Connects to remote HTTP/Streamable HTTP endpoints (`https://...`) or, only with `--allow-stdio`, launches a local CLI binary.
 - **🔑 Enterprise Authentication**: Pass custom headers (`-H "Authorization: Bearer <token>"`) to validate authenticated MCP servers.
 - **🛠️ Tool Schema Validation**: Generates valid, edge, missing parameter, invalid type, and null test cases per tool.
 - **🛡️ Output Schema Validation**: Validates tool response payloads against declared `outputSchema` definitions.
-- **💣 Security Fuzzing**: Tests SQLi, Path Traversal, XSS, Format Strings, and Buffer Overflows.
-- **📄 Resource & Prompt Testing**: Automatically discovers and tests `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`.
+- **💣 Security Fuzzing**: Tests SQLi, Path Traversal, XSS, Format Strings, and Buffer Overflows only after explicit bounded opt-in.
+- **📄 Resource & Prompt Testing**: Discovers resources and prompts by default; reads or invokes them only after separate, bounded opt-in.
 - **📊 Enterprise CI/CD Exporters**: Supports Markdown, JSON, **SARIF v2.1.0**, and **JUnit XML**.
 - **🏷️ Dynamic SVG Badges**: Embed live badge SVG status cards in your server's README file.
 - **🏆 Ecosystem Compatibility Benchmark**: Run automated benchmark matrix reports across public MCP servers.
@@ -123,9 +123,15 @@ Validate an authenticated server with Bearer Token:
 npx tsx src/cli.ts https://api.example.com/mcp -H "Authorization: Bearer my_secret_token" --format sarif
 ```
 
-Validate a local stdio MCP server command:
+Run up to five non-fuzz tool cases against a remote MCP server:
 ```bash
-npx tsx src/cli.ts --command "node dist/index.js" --format junit
+npx tsx src/cli.ts https://acp-bridge-mcp.jonathonpowell.workers.dev/mcp \
+  --allow-tool-execution --max-tests 5 --format md
+```
+
+Validate a local stdio MCP server command only after explicitly approving process launch:
+```bash
+npx tsx src/cli.ts --command "node dist/index.js" --allow-stdio --format junit
 ```
 
 ### 2. Standalone Build & Run
@@ -210,7 +216,15 @@ jobs:
 | `-H, --header` | `string` | — | Custom HTTP header (e.g. `-H "Authorization: Bearer token"`) |
 | `--format` | `json` \| `md` \| `sarif` \| `junit` | `json` | Report output format |
 | `--timeout` | `number` | `30000` | Request timeout in milliseconds |
-| `--max-tests` | `number` | — | Limit total tool test cases executed |
+| `--allow-tool-execution` | flag | off | Permit non-fuzz tool calls; requires `--max-tests` |
+| `--allow-fuzzing` | flag | off | Permit generated fuzz cases; requires tool execution approval |
+| `--max-tests` | `number` | `0` | Maximum tool test cases executed |
+| `--allow-resource-reads` | flag | off | Permit resource reads; requires `--max-resources` |
+| `--max-resources` | `number` | `0` | Maximum resource reads |
+| `--allow-prompt-execution` | flag | off | Permit prompt invocation; requires `--max-prompts` |
+| `--max-prompts` | `number` | `0` | Maximum prompt invocations |
+| `--allow-stdio` | flag | off | Permit the supplied local stdio command to launch |
+| `--max-output-bytes` | `number` | `262144` | Maximum serialized output retained in a report |
 
 ---
 

@@ -12,7 +12,10 @@ export interface ValidationReport {
     pass: number;
     fail: number;
     crash: number;
+    timeout: number;
     schemaMismatch: number;
+    skipped: number;
+    outputLimited: number;
     fuzzingPassed: number;
   };
   results: TestResult[];
@@ -22,19 +25,21 @@ export interface ValidationReport {
 
 export function buildReport(server: string, suite: SuiteResults): ValidationReport {
   const { toolResults, resourceResults, promptResults } = suite;
-
   const summary = {
-    pass: toolResults.filter((r) => r.status === "pass").length,
-    fail: toolResults.filter((r) => r.status === "fail").length,
-    crash: toolResults.filter((r) => r.status === "crash").length,
-    schemaMismatch: toolResults.filter((r) => r.status === "schema_mismatch").length,
-    fuzzingPassed: toolResults.filter((r) => r.category.startsWith("fuzz_") && r.status === "pass").length,
+    pass: toolResults.filter((result) => result.status === "pass").length,
+    fail: toolResults.filter((result) => result.status === "fail").length,
+    crash: toolResults.filter((result) => result.status === "crash").length,
+    timeout: toolResults.filter((result) => result.status === "timeout").length,
+    schemaMismatch: toolResults.filter((result) => result.status === "schema_mismatch").length,
+    skipped: toolResults.filter((result) => result.status === "skipped").length,
+    outputLimited: toolResults.filter((result) => result.status === "output_limited").length,
+    fuzzingPassed: toolResults.filter((result) => result.category.startsWith("fuzz_") && result.status === "pass").length,
   };
 
   return {
     server,
     timestamp: new Date().toISOString(),
-    toolsDiscovered: new Set(toolResults.map((r) => r.toolName)).size,
+    toolsDiscovered: new Set(toolResults.map((result) => result.toolName)).size,
     resourcesDiscovered: resourceResults.length,
     promptsDiscovered: promptResults.length,
     testsRun: toolResults.length + resourceResults.length + promptResults.length,
@@ -51,166 +56,129 @@ export function reportAsJson(report: ValidationReport): string {
 
 export function reportAsMarkdown(report: ValidationReport): string {
   const lines: string[] = [];
-  lines.push(`# ⚡ MCP Server Validation Report`);
-  lines.push("");
+  lines.push("# MCP Server Validation Report", "");
   lines.push(`**Server / Command:** \`${report.server}\``);
   lines.push(`**Date:** ${report.timestamp}`);
   lines.push(`**Tools Discovered:** ${report.toolsDiscovered}`);
   lines.push(`**Resources Discovered:** ${report.resourcesDiscovered}`);
   lines.push(`**Prompts Discovered:** ${report.promptsDiscovered}`);
-  lines.push(`**Total Tests Run:** ${report.testsRun}`);
-  lines.push("");
-  lines.push(`## 📊 Summary`);
-  lines.push("");
-  lines.push(`| Status | Count |`);
-  lines.push(`|--------|-------|`);
+  lines.push(`**Total Cases Reported:** ${report.testsRun}`, "");
+  lines.push("## Summary", "", "| Status | Count |", "|--------|-------|");
   lines.push(`| Pass | ${report.summary.pass} |`);
   lines.push(`| Fail | ${report.summary.fail} |`);
   lines.push(`| Crash | ${report.summary.crash} |`);
+  lines.push(`| Timeout | ${report.summary.timeout} |`);
   lines.push(`| Schema Mismatch | ${report.summary.schemaMismatch} |`);
-  lines.push(`| Security Fuzzing Passed | ${report.summary.fuzzingPassed} |`);
-  lines.push("");
+  lines.push(`| Skipped by Policy / Budget | ${report.summary.skipped} |`);
+  lines.push(`| Output Limited | ${report.summary.outputLimited} |`);
+  lines.push(`| Security Fuzzing Passed | ${report.summary.fuzzingPassed} |`, "");
 
-  // Tools Table
-  if (report.results.length > 0) {
-    lines.push(`## 🛠️ Tool Validation Results`);
-    lines.push("");
-
-    const byTool = new Map<string, TestResult[]>();
-    for (const r of report.results) {
-      if (!byTool.has(r.toolName)) byTool.set(r.toolName, []);
-      byTool.get(r.toolName)!.push(r);
-    }
-
-    for (const [toolName, toolResults] of byTool) {
-      lines.push(`### Tool: \`${toolName}\``);
-      lines.push("");
-      lines.push(`| Category | Description | Status | Duration | Error |`);
-      lines.push(`|----------|-------------|--------|----------|-------|`);
-      for (const r of toolResults) {
-        const error = r.error ? r.error.replace(/\|/g, "\\|").substring(0, 80) : "";
-        lines.push(`| ${r.category} | ${r.description} | ${r.status} | ${r.durationMs}ms | ${error} |`);
-      }
-      lines.push("");
-    }
-  }
-
-  // Resources Table
-  if (report.resources.length > 0) {
-    lines.push(`## 📄 Resource Validation Results`);
-    lines.push("");
-    lines.push(`| Resource Name | URI | MIME Type | Status | Duration | Error |`);
-    lines.push(`|---------------|-----|-----------|--------|----------|-------|`);
-    for (const r of report.resources) {
-      const error = r.error ? r.error.replace(/\|/g, "\\|").substring(0, 80) : "";
-      lines.push(`| ${r.name} | \`${r.uri}\` | ${r.mimeType || "N/A"} | ${r.status} | ${r.durationMs}ms | ${error} |`);
-    }
-    lines.push("");
-  }
-
-  // Prompts Table
-  if (report.prompts.length > 0) {
-    lines.push(`## 💬 Prompt Validation Results`);
-    lines.push("");
-    lines.push(`| Prompt Name | Description | Status | Duration | Error |`);
-    lines.push(`|-------------|-------------|--------|----------|-------|`);
-    for (const p of report.prompts) {
-      const error = p.error ? p.error.replace(/\|/g, "\\|").substring(0, 80) : "";
-      lines.push(`| ${p.promptName} | ${p.description} | ${p.status} | ${p.durationMs}ms | ${error} |`);
-    }
-    lines.push("");
-  }
-
+  appendToolResults(lines, report.results);
+  appendResourceResults(lines, report.resources);
+  appendPromptResults(lines, report.prompts);
   return lines.join("\n");
 }
 
-/**
- * Output report as SARIF v2.1.0 for GitHub Code Scanning / Security Tab integration.
- */
-export function reportAsSarif(report: ValidationReport): string {
-  const rules: any[] = [];
-  const results: any[] = [];
-
-  const ruleMap = new Map<string, number>();
-
-  for (const r of report.results) {
-    if (r.status === "fail" || r.status === "crash" || r.status === "schema_mismatch") {
-      const ruleId = `MCP-${r.category.toUpperCase()}`;
-      if (!ruleMap.has(ruleId)) {
-        ruleMap.set(ruleId, rules.length);
-        rules.push({
-          id: ruleId,
-          shortDescription: { text: `MCP Validation Issue: ${r.category}` },
-          fullDescription: { text: `Validation failed for category ${r.category}` },
-          defaultConfiguration: {
-            level: r.status === "crash" ? "error" : "warning",
-          },
-        });
-      }
-
-      results.push({
-        ruleId,
-        ruleIndex: ruleMap.get(ruleId),
-        message: {
-          text: `[Tool: ${r.toolName}] ${r.description}: ${r.error || r.status}`,
-        },
-        locations: [
-          {
-            physicalLocation: {
-              artifactLocation: { uri: `mcp://${report.server}/${r.toolName}` },
-            },
-          },
-        ],
-      });
-    }
+function appendToolResults(lines: string[], results: TestResult[]): void {
+  if (results.length === 0) return;
+  lines.push("## Tool Validation Results", "");
+  const byTool = new Map<string, TestResult[]>();
+  for (const result of results) {
+    byTool.set(result.toolName, [...(byTool.get(result.toolName) ?? []), result]);
   }
-
-  const sarif = {
-    $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-    version: "2.1.0",
-    runs: [
-      {
-        tool: {
-          driver: {
-            name: "MCP Validator",
-            version: "1.0.0",
-            rules,
-          },
-        },
-        results,
-      },
-    ],
-  };
-
-  return JSON.stringify(sarif, null, 2);
+  for (const [toolName, toolResults] of byTool) {
+    lines.push(`### Tool: \`${toolName}\``, "");
+    lines.push("| Category | Description | Status | Duration | Error |", "|----------|-------------|--------|----------|-------|");
+    for (const result of toolResults) {
+      lines.push(`| ${result.category} | ${result.description} | ${result.status} | ${result.durationMs}ms | ${escapeTable(result.error)} |`);
+    }
+    lines.push("");
+  }
 }
 
-/**
- * Output report as JUnit XML format for Jenkins, CircleCI, and GitHub Actions test reporting.
- */
-export function reportAsJunit(report: ValidationReport): string {
-  const xmlLines: string[] = [];
-  xmlLines.push('<?xml version="1.0" encoding="UTF-8"?>');
-  xmlLines.push(
-    `<testsuite name="MCP Validation" tests="${report.testsRun}" failures="${report.summary.fail + report.summary.schemaMismatch}" errors="${report.summary.crash}" timestamp="${report.timestamp}">`
-  );
+function appendResourceResults(lines: string[], results: ResourceTestResult[]): void {
+  if (results.length === 0) return;
+  lines.push("## Resource Validation Results", "");
+  lines.push("| Resource Name | URI | MIME Type | Status | Duration | Error |", "|---------------|-----|-----------|--------|----------|-------|");
+  for (const result of results) {
+    lines.push(`| ${result.name} | \`${result.uri}\` | ${result.mimeType || "N/A"} | ${result.status} | ${result.durationMs}ms | ${escapeTable(result.error)} |`);
+  }
+  lines.push("");
+}
 
-  for (const r of report.results) {
-    xmlLines.push(`  <testcase classname="${r.toolName}" name="${escapeXml(r.description)}" time="${(r.durationMs / 1000).toFixed(3)}">`);
-    if (r.status === "fail" || r.status === "schema_mismatch") {
-      xmlLines.push(`    <failure message="${escapeXml(r.error || r.status)}">${escapeXml(JSON.stringify(r.input))}</failure>`);
-    } else if (r.status === "crash") {
-      xmlLines.push(`    <error message="${escapeXml(r.error || "Server Crash")}">${escapeXml(JSON.stringify(r.input))}</error>`);
+function appendPromptResults(lines: string[], results: PromptTestResult[]): void {
+  if (results.length === 0) return;
+  lines.push("## Prompt Validation Results", "");
+  lines.push("| Prompt Name | Description | Status | Duration | Error |", "|-------------|-------------|--------|----------|-------|");
+  for (const result of results) {
+    lines.push(`| ${result.promptName} | ${result.description} | ${result.status} | ${result.durationMs}ms | ${escapeTable(result.error)} |`);
+  }
+  lines.push("");
+}
+
+function escapeTable(value: string | null): string {
+  return value ? value.replace(/\|/g, "\\|").substring(0, 120) : "";
+}
+
+/** Output SARIF v2.1.0 for code-scanning integration. */
+export function reportAsSarif(report: ValidationReport): string {
+  const rules: Array<Record<string, unknown>> = [];
+  const results: Array<Record<string, unknown>> = [];
+  const ruleMap = new Map<string, number>();
+  const reportable = new Set(["fail", "crash", "timeout", "schema_mismatch", "output_limited"]);
+
+  for (const result of report.results) {
+    if (!reportable.has(result.status)) continue;
+    const ruleId = `MCP-${result.category.toUpperCase()}`;
+    if (!ruleMap.has(ruleId)) {
+      ruleMap.set(ruleId, rules.length);
+      rules.push({
+        id: ruleId,
+        shortDescription: { text: `MCP validation issue: ${result.category}` },
+        fullDescription: { text: `Validation reported ${result.status} for ${result.category}` },
+        defaultConfiguration: { level: result.status === "crash" || result.status === "timeout" ? "error" : "warning" },
+      });
     }
-    xmlLines.push(`  </testcase>`);
+    results.push({
+      ruleId,
+      ruleIndex: ruleMap.get(ruleId),
+      message: { text: `[Tool: ${result.toolName}] ${result.description}: ${result.error || result.status}` },
+      locations: [{ physicalLocation: { artifactLocation: { uri: `mcp://${report.server}/${result.toolName}` } } }],
+    });
+  }
+
+  return JSON.stringify({
+    $schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+    version: "2.1.0",
+    runs: [{ tool: { driver: { name: "MCP Validator", version: "1.1.0", rules } }, results }],
+  }, null, 2);
+}
+
+/** Output JUnit XML, preserving policy skips as skipped test cases. */
+export function reportAsJunit(report: ValidationReport): string {
+  const xmlLines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<testsuite name="MCP Validation" tests="${report.testsRun}" failures="${report.summary.fail + report.summary.schemaMismatch}" errors="${report.summary.crash + report.summary.timeout}" skipped="${report.summary.skipped}" timestamp="${report.timestamp}">`,
+  ];
+
+  for (const result of report.results) {
+    xmlLines.push(`  <testcase classname="${escapeXml(result.toolName)}" name="${escapeXml(result.description)}" time="${(result.durationMs / 1000).toFixed(3)}">`);
+    if (result.status === "fail" || result.status === "schema_mismatch" || result.status === "output_limited") {
+      xmlLines.push(`    <failure message="${escapeXml(result.error || result.status)}">${escapeXml(JSON.stringify(result.input))}</failure>`);
+    } else if (result.status === "crash" || result.status === "timeout") {
+      xmlLines.push(`    <error message="${escapeXml(result.error || result.status)}">${escapeXml(JSON.stringify(result.input))}</error>`);
+    } else if (result.status === "skipped") {
+      xmlLines.push(`    <skipped message="${escapeXml(result.error || "Skipped by policy")}" />`);
+    }
+    xmlLines.push("  </testcase>");
   }
 
   xmlLines.push("</testsuite>");
   return xmlLines.join("\n");
 }
 
-function escapeXml(unsafe: string): string {
-  return unsafe
+function escapeXml(value: string): string {
+  return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

@@ -15,7 +15,14 @@ export type TestCategory =
   | "fuzz_format_string"
   | "fuzz_deep_nesting";
 
-export type TestStatus = "pass" | "fail" | "crash" | "schema_mismatch";
+export type TestStatus =
+  | "pass"
+  | "fail"
+  | "crash"
+  | "schema_mismatch"
+  | "skipped"
+  | "timeout"
+  | "output_limited";
 
 export interface TestCase {
   category: TestCategory;
