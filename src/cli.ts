@@ -1,14 +1,31 @@
+import { writeFile } from "node:fs/promises";
 import { RawMcpClient, StdioMcpClient, McpClientInterface } from "./client.js";
+import { createCapabilityEvidence, createTraceId, isTraceId, type RiskTier } from "./evidence.js";
 import { generateTestCases } from "./generator.js";
 import { runTests, type RunOptions } from "./runner.js";
 import { buildReport, reportAsJson, reportAsMarkdown, reportAsSarif, reportAsJunit } from "./reporter.js";
 
-function readPositiveInteger(value: string | undefined, option: string): number {
+const RISK_TIERS: readonly RiskTier[] = [
+  "unclassified",
+  "read_only",
+  "reversible",
+  "external_write",
+  "financial_or_irreversible",
+];
+
+function readPositiveInteger(value: string | undefined, option: string, maximum = Number.MAX_SAFE_INTEGER): number {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(`${option} requires a positive integer.`);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new Error(`${option} requires an integer from 1 to ${maximum}.`);
   }
   return parsed;
+}
+
+function readRiskTier(value: string | undefined): RiskTier {
+  if (!value || !RISK_TIERS.includes(value as RiskTier)) {
+    throw new Error(`--risk-tier must be one of: ${RISK_TIERS.join(", ")}.`);
+  }
+  return value as RiskTier;
 }
 
 async function main() {
@@ -34,17 +51,20 @@ Execution options (each requires an explicit bounded budget):
   --max-prompts <n>              Maximum prompt invocations
   --allow-stdio                  Permit launching the supplied local stdio command
 
+Capability evidence:
+  --trace-id <id>                Trace ID; generated when omitted (format: trc_...)
+  --environment <name>           Environment label (default: development)
+  --risk-tier <tier>             unclassified|read_only|reversible|external_write|financial_or_irreversible
+  --policy-version <value>       Optional policy version reference
+  --evidence-ttl-hours <n>       Evidence freshness period, 1–720 hours (default: 24)
+  --write-evidence <path>        Write the capability-evidence JSON artifact
+
 Other options:
   --header, -H <header>          Custom HTTP header (avoid passing secrets in shared shell history)
   --format <json|md|sarif|junit> Output format (default: json)
   --timeout <ms>                 Per-operation timeout in milliseconds (default: 30000)
   --max-output-bytes <n>         Maximum serialized output retained per result (default: 262144)
   --help, -h                     Show this help
-
-Examples:
-  npx mcp-validate https://example.com/mcp
-  npx mcp-validate https://example.com/mcp --allow-tool-execution --max-tests 5
-  npx mcp-validate https://example.com/mcp --allow-resource-reads --max-resources 2
 `);
     return;
   }
@@ -54,6 +74,12 @@ Examples:
   let format = "json";
   let timeout = 30_000;
   let allowStdio = false;
+  let traceId = createTraceId();
+  let environment = "development";
+  let riskTier: RiskTier = "unclassified";
+  let policyVersion: string | undefined;
+  let evidencePath: string | undefined;
+  let evidenceTtlHours = 24;
   const customHeaders: Record<string, string> = {};
   const runOptions: RunOptions = {};
 
@@ -83,24 +109,48 @@ Examples:
         index += 1;
         break;
       case "--timeout":
-        timeout = readPositiveInteger(next, "--timeout");
+        timeout = readPositiveInteger(next, "--timeout", 300_000);
         runOptions.operationTimeoutMs = timeout;
         index += 1;
         break;
       case "--max-output-bytes":
-        runOptions.maxOutputBytes = readPositiveInteger(next, "--max-output-bytes");
+        runOptions.maxOutputBytes = readPositiveInteger(next, "--max-output-bytes", 10 * 1024 * 1024);
         index += 1;
         break;
       case "--max-tests":
-        runOptions.maxToolTests = readPositiveInteger(next, "--max-tests");
+        runOptions.maxToolTests = readPositiveInteger(next, "--max-tests", 10_000);
         index += 1;
         break;
       case "--max-resources":
-        runOptions.maxResourceReads = readPositiveInteger(next, "--max-resources");
+        runOptions.maxResourceReads = readPositiveInteger(next, "--max-resources", 10_000);
         index += 1;
         break;
       case "--max-prompts":
-        runOptions.maxPromptGets = readPositiveInteger(next, "--max-prompts");
+        runOptions.maxPromptGets = readPositiveInteger(next, "--max-prompts", 10_000);
+        index += 1;
+        break;
+      case "--trace-id":
+        traceId = next || "";
+        index += 1;
+        break;
+      case "--environment":
+        environment = (next || "").trim();
+        index += 1;
+        break;
+      case "--risk-tier":
+        riskTier = readRiskTier(next);
+        index += 1;
+        break;
+      case "--policy-version":
+        policyVersion = (next || "").trim() || undefined;
+        index += 1;
+        break;
+      case "--evidence-ttl-hours":
+        evidenceTtlHours = readPositiveInteger(next, "--evidence-ttl-hours", 24 * 30);
+        index += 1;
+        break;
+      case "--write-evidence":
+        evidencePath = next || "";
         index += 1;
         break;
       case "--allow-tool-execution":
@@ -116,26 +166,19 @@ Examples:
         runOptions.allowPromptExecution = true;
         break;
       default:
-        if (!argument.startsWith("-") && !serverTarget) {
-          serverTarget = argument;
-        } else if (argument.startsWith("-")) {
-          throw new Error(`Unknown option: ${argument}`);
-        }
+        if (!argument.startsWith("-") && !serverTarget) serverTarget = argument;
+        else if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
     }
   }
 
-  if (runOptions.allowToolExecution && !runOptions.maxToolTests) {
-    throw new Error("--allow-tool-execution requires --max-tests <n>.");
-  }
-  if (runOptions.allowFuzzing && !runOptions.allowToolExecution) {
-    throw new Error("--allow-fuzzing requires --allow-tool-execution.");
-  }
-  if (runOptions.allowResourceReads && !runOptions.maxResourceReads) {
-    throw new Error("--allow-resource-reads requires --max-resources <n>.");
-  }
-  if (runOptions.allowPromptExecution && !runOptions.maxPromptGets) {
-    throw new Error("--allow-prompt-execution requires --max-prompts <n>.");
-  }
+  if (!isTraceId(traceId)) throw new Error("--trace-id must use the trc_ prefix and contain 12–128 URL-safe characters.");
+  if (!/^[A-Za-z0-9._:@/-]{1,128}$/.test(environment)) throw new Error("--environment contains unsupported characters.");
+  if (policyVersion && !/^[A-Za-z0-9._:@/-]{1,128}$/.test(policyVersion)) throw new Error("--policy-version contains unsupported characters.");
+  if (evidencePath !== undefined && !evidencePath) throw new Error("--write-evidence requires a file path.");
+  if (runOptions.allowToolExecution && !runOptions.maxToolTests) throw new Error("--allow-tool-execution requires --max-tests <n>.");
+  if (runOptions.allowFuzzing && !runOptions.allowToolExecution) throw new Error("--allow-fuzzing requires --allow-tool-execution.");
+  if (runOptions.allowResourceReads && !runOptions.maxResourceReads) throw new Error("--allow-resource-reads requires --max-resources <n>.");
+  if (runOptions.allowPromptExecution && !runOptions.maxPromptGets) throw new Error("--allow-prompt-execution requires --max-prompts <n>.");
 
   let client: McpClientInterface;
   let targetLabel: string;
@@ -153,13 +196,33 @@ Examples:
   }
 
   const tools = await client.discoverTools();
-  console.error(`Discovered ${tools.length} tools.`);
+  console.error(`Discovered ${tools.length} tools; trace=${traceId}.`);
   const testCases = new Map(tools.map((tool) => [tool.name, generateTestCases(tool.inputSchema as Record<string, unknown>)]));
   const totalCases = Array.from(testCases.values()).reduce((sum, cases) => sum + cases.length, 0);
   console.error(`Generated ${totalCases} candidate cases; execution follows the explicit policy flags.`);
 
   const suiteResults = await runTests(client, tools, testCases, runOptions);
   const report = buildReport(targetLabel, suiteResults);
+  report.capability_evidence = createCapabilityEvidence({
+    target: targetLabel,
+    trace: {
+      schema_version: "operation-envelope/v1",
+      trace_id: traceId,
+      environment,
+      risk_tier: riskTier,
+      ...(policyVersion ? { policy_version: policyVersion } : {}),
+    },
+    tools,
+    report,
+    options: runOptions,
+    ttlHours: evidenceTtlHours,
+  });
+
+  if (evidencePath) {
+    await writeFile(evidencePath, JSON.stringify(report.capability_evidence, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    console.error(`Wrote capability evidence to ${evidencePath}.`);
+  }
+
   if (format === "md") console.log(reportAsMarkdown(report));
   else if (format === "sarif") console.log(reportAsSarif(report));
   else if (format === "junit") console.log(reportAsJunit(report));

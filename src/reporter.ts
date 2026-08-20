@@ -1,5 +1,6 @@
 import type { TestResult, ResourceTestResult, PromptTestResult } from "./types.js";
 import type { SuiteResults } from "./runner.js";
+import type { CapabilityEvidence } from "./evidence.js";
 
 export interface ValidationReport {
   server: string;
@@ -21,6 +22,7 @@ export interface ValidationReport {
   results: TestResult[];
   resources: ResourceTestResult[];
   prompts: PromptTestResult[];
+  capability_evidence?: CapabilityEvidence;
 }
 
 export function buildReport(server: string, suite: SuiteResults): ValidationReport {
@@ -72,6 +74,17 @@ export function reportAsMarkdown(report: ValidationReport): string {
   lines.push(`| Skipped by Policy / Budget | ${report.summary.skipped} |`);
   lines.push(`| Output Limited | ${report.summary.outputLimited} |`);
   lines.push(`| Security Fuzzing Passed | ${report.summary.fuzzingPassed} |`, "");
+
+  if (report.capability_evidence) {
+    const evidence = report.capability_evidence;
+    lines.push("## Capability Evidence", "");
+    lines.push("| Field | Value |", "|-------|-------|");
+    lines.push(`| Trace | \`${evidence.trace.trace_id}\` |`);
+    lines.push(`| Environment | ${evidence.trace.environment} |`);
+    lines.push(`| Risk tier | ${evidence.trace.risk_tier} |`);
+    lines.push(`| Validation state | ${evidence.validation_state} |`);
+    lines.push(`| Fresh until | ${evidence.valid_until} |`, "");
+  }
 
   appendToolResults(lines, report.results);
   appendResourceResults(lines, report.resources);
